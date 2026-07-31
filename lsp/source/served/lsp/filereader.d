@@ -478,7 +478,6 @@ unittest
 	assert(code == "module served.ls");
 }
 
-
 unittest
 {
 	import core.time : msecs, seconds;

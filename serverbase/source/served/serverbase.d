@@ -498,7 +498,7 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 			// fiber can block forever on a client reply, which is idle, not busy.
 			bool activityThisInterval, activitySinceCollect;
 
-			void collectGC()
+			void collectGC(bool forceMinimize = false)
 			{
 				import core.memory : GC;
 
@@ -512,7 +512,10 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 				static if (serverConfig.gcMinimizeTimes > 0)
 				{
 					gcCollects++;
-					if (gcCollects >= serverConfig.gcMinimizeTimes)
+					// release memory if we can once things have settled; an idle
+					// server no longer collects often enough to reach
+					// gcMinimizeTimes on its own
+					if (forceMinimize || gcCollects >= serverConfig.gcMinimizeTimes)
 					{
 						GC.minimize();
 						gcCollects = 0;
@@ -626,9 +629,9 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 					if (GC.stats().usedSize >= gcUsedAtLastCollect
 							+ serverConfig.gcCollectMinAllocated)
 						collectGC();
-					// gone quiet: collect once to release what the work dropped
+					// gone quiet: collect once and release memory if we can
 					else if (activitySinceCollect && !busy)
-						collectGC();
+						collectGC(true);
 					else
 						gcInterval.reset();
 				}
