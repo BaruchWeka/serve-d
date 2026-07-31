@@ -779,9 +779,19 @@ void delayedProjectActivation(WorkspaceD.Instance instance, string workspaceRoot
 				}
 				auto loadButton = translate!"d.served.tooManySubprojects.load";
 				auto skipButton = translate!"d.served.tooManySubprojects.skip";
-				auto res = rpc.window.requestMessage(MessageType.warning,
-						translate!"d.served.tooManySubprojects.path"(root.dir),
-						[loadButton, skipButton]);
+
+				// some clients never answer; empty res skips, as dismissing would
+				enum promptTimeout = 10.minutes;
+
+				string res;
+				try
+					res = rpc.window.requestMessage(MessageType.warning,
+							translate!"d.served.tooManySubprojects.path"(root.dir),
+							[loadButton, skipButton], promptTimeout);
+				catch (Exception e)
+					warningf("No answer to the subproject load prompt for %s after "
+						~ "%s, skipping it: %s", root.dir, promptTimeout, e.msg);
+
 				if (res != loadButton)
 					goto case ManyProjectsAction.skip;
 				break;
