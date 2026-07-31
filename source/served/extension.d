@@ -856,11 +856,23 @@ void delayedProjectActivation(WorkspaceD.Instance instance, string workspaceRoot
 								missingList = missingList[0 .. comma + 1] ~ " ...";
 						}
 
-						auto res = rpc.window.requestMessage(
-							MessageType.info,
-							translate!"d.dub.downloadMissingMsg"(missingList),
-							[upgrade, always, never]
-						);
+						// some clients never answer; empty res downloads nothing, as
+						// dismissing would
+						enum promptTimeout = 10.minutes;
+
+						string res;
+						try
+							res = rpc.window.requestMessage(
+								MessageType.info,
+								translate!"d.dub.downloadMissingMsg"(missingList),
+								[upgrade, always, never],
+								promptTimeout
+							);
+						catch (Exception e)
+							warningf("No answer to the missing dependency prompt "
+								~ "after %s, not downloading: %s", promptTimeout,
+								e.msg);
+
 						if (res == always)
 						{
 							rpc.notifyMethod("coded/updateSetting", UpdateSettingParams("forceDownloadDependencies",
