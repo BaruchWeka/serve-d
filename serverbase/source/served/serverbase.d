@@ -38,6 +38,10 @@ struct LanguageServerConfig
 	int gcCollectSeconds = 30;
 	/// ditto
 	int gcMinimizeTimes = 5;
+	/// Bytes that must have been allocated since the last collection for the
+	/// periodic collector to run again. One collection also always runs once the
+	/// server goes quiet.
+	size_t gcCollectMinAllocated = 128 * 1024 * 1024;
 }
 
 // dumps a performance/GC trace log to served_trace.log
@@ -483,6 +487,12 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 			int gcCollects, totalGcCollects;
 			StopWatch gcInterval;
 			gcInterval.start();
+			// Nothing is freed between collections, so usedSize growth is the
+			// amount allocated, from any thread or fiber.
+			size_t gcUsedAtLastCollect;
+			// Detects the busy -> quiet edge. Keyed on messages, not live fibers: a
+			// fiber can block forever on a client reply, which is idle, not busy.
+			bool activityThisInterval, activitySinceCollect;
 
 			void collectGC()
 			{
@@ -507,6 +517,8 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 
 				gcSpeed.stop();
 				auto after = GC.stats();
+				gcUsedAtLastCollect = after.usedSize;
+				activitySinceCollect = false;
 
 				if (before != after)
 					tracef("GC run in %s. Freed %s bytes (%s bytes allocated, %s bytes available)", gcSpeed.peek,
@@ -562,6 +574,9 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 					pushFiber(msg.fiberName, gotRequest(msg));
 				else
 					pushFiber(msg.fiberName, gotNotify(msg));
+
+				static if (serverConfig.gcCollectSeconds > 0)
+					activityThisInterval = activitySinceCollect = true;
 			}
 			Thread.sleep(loopIterationDelay);
 			synchronized (fibersMutex)
@@ -571,7 +586,20 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 			{
 				if (gcInterval.peek > serverConfig.gcCollectSeconds.seconds)
 				{
-					collectGC();
+					import core.memory : GC;
+
+					immutable busy = activityThisInterval;
+					activityThisInterval = false;
+
+					// busy: collect once enough was allocated to be worth marking
+					if (GC.stats().usedSize >= gcUsedAtLastCollect
+							+ serverConfig.gcCollectMinAllocated)
+						collectGC();
+					// gone quiet: collect once to release what the work dropped
+					else if (activitySinceCollect && !busy)
+						collectGC();
+					else
+						gcInterval.reset();
 				}
 			}
 		}
