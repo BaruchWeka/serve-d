@@ -9,7 +9,7 @@ import served.utils.translate;
 
 public import served.utils.async;
 
-import core.time : msecs, seconds;
+import core.time : minutes, msecs, seconds;
 
 import std.algorithm : any, canFind, endsWith, map, remove;
 import std.array : appender, array;
@@ -451,7 +451,20 @@ void doGlobalStartup(UserConfiguration config)
 					if (!backend.has!DCDComponent)
 						actions.length--;
 
-					auto res = rpc.window.requestMessage(MessageType.error, outdatedMessage, actions);
+					// some clients never answer; without a timeout this fiber would
+					// live for the rest of the process
+					enum promptTimeout = 10.minutes;
+
+					string res;
+					try
+						res = rpc.window.requestMessage(MessageType.error,
+							outdatedMessage, actions, promptTimeout);
+					catch (Exception e)
+					{
+						warningf("No answer to the DCD update prompt after %s, "
+							~ "giving up: %s", promptTimeout, e.msg);
+						return;
+					}
 
 					if (res == action)
 						spawnFiber("updateDCD", (&updateDCD).toDelegate);
