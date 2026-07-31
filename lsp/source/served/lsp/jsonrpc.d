@@ -414,6 +414,10 @@ class RPCProcessor : Fiber
 
 		StopWatch sw;
 		sw.start();
+		// a timed-out wait must release its slot too, or prepareWait can never
+		// reuse it
+		scope (failure)
+			responseTokens[i].handled = true;
 		while (!responseTokens[i].got)
 		{
 			if (timeout != Duration.max
