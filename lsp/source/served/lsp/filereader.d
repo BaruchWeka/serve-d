@@ -262,6 +262,10 @@ abstract class FileReader : Thread
 
 	string yieldLine(bool* whileThisIs = null, bool equalToThis = true)
 	{
+		// hoisted: as a literal this allocates on every call, and this runs once
+		// per main loop iteration even when idle
+		static immutable ubyte[2] crlf = [cast(ubyte) '\r', cast(ubyte) '\n'];
+
 		ptrdiff_t index;
 		string ret;
 		while (whileThisIs is null || *whileThisIs == equalToThis)
@@ -269,7 +273,7 @@ abstract class FileReader : Thread
 			bool hasData;
 			synchronized (mutex)
 			{
-				index = data.countUntil([cast(ubyte) '\r', cast(ubyte) '\n']);
+				index = data.countUntil(crlf[]);
 				if (index != -1)
 				{
 					ret = cast(string) data[0 .. index].dup;
