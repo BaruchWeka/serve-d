@@ -961,22 +961,28 @@ struct WindowFunctions
 	}
 
 	/// Runs window/showMessageRequest which typically shows a message box with possible action buttons to click. Returns the action which got clicked or one with null title if it has been dismissed.
-	MessageActionItem requestMessage(MessageType type, string message, MessageActionItem[] actions)
+	///
+	/// Params:
+	///   timeout = how long to wait for an answer; throws once it elapses. Clients
+	///     are not required to ever answer.
+	MessageActionItem requestMessage(MessageType type, string message,
+		MessageActionItem[] actions, Duration timeout = Duration.max)
 	{
 		auto res = rpc.sendRequest("window/showMessageRequest",
-				ShowMessageRequestParams(type, message, actions.opt));
+				ShowMessageRequestParams(type, message, actions.opt), timeout);
 		if (!res.resultJson.length || res.resultJson == `null`)
 			return MessageActionItem(null);
 		return res.resultJson.deserializeJson!MessageActionItem;
 	}
 
 	/// ditto
-	string requestMessage(MessageType type, string message, string[] actions)
+	string requestMessage(MessageType type, string message, string[] actions,
+		Duration timeout = Duration.max)
 	{
 		MessageActionItem[] a = new MessageActionItem[actions.length];
 		foreach (i, action; actions)
 			a[i] = MessageActionItem(action);
-		return requestMessage(type, message, a).title;
+		return requestMessage(type, message, a, timeout).title;
 	}
 
 	/// Runs a function and shows a UI message on failure and logs the error.
