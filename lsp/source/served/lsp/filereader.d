@@ -1,7 +1,9 @@
 module served.lsp.filereader;
 
+import core.sync.condition;
 import core.sync.mutex;
 import core.thread;
+import core.time : Duration;
 
 import std.algorithm;
 import std.stdio;
@@ -31,6 +33,10 @@ version (Windows) class WindowsStdinReader : FileReader
 		closeEvent.reset();
 		scope (exit)
 			closeEvent.set();
+		// let a waiter notice we stopped instead of sitting out its timeout
+		scope (exit)
+			synchronized (mutex)
+				notifyDataAvailable();
 
 		auto stdin = GetStdHandle(STD_INPUT_HANDLE);
 		ubyte[4096] buffer;
@@ -54,7 +60,10 @@ version (Windows) class WindowsStdinReader : FileReader
 					return;
 				}
 				synchronized (mutex)
+				{
 					data ~= buffer[0 .. len];
+					notifyDataAvailable();
+				}
 				break;
 			case WAIT_FAILED:
 				stderr.writeln("stdin read failed ", GetLastError());
@@ -108,6 +117,10 @@ version (Windows) class WindowsFileReader : FileReader
 		closeEvent.reset();
 		scope (exit)
 			closeEvent.set();
+		// let a waiter notice we stopped instead of sitting out its timeout
+		scope (exit)
+			synchronized (mutex)
+				notifyDataAvailable();
 
 		ubyte[4096] buffer;
 
@@ -132,7 +145,10 @@ version (Windows) class WindowsFileReader : FileReader
 				continue;
 			}
 			synchronized (mutex)
+			{
 				data ~= buffer[0 .. numRead];
+				notifyDataAvailable();
+			}
 		}
 	}
 
@@ -195,6 +211,10 @@ version (Posix) class PosixFileReader : FileReader
 		closeEvent.reset();
 		scope (exit)
 			closeEvent.setIfInitialized();
+		// let a waiter notice we stopped instead of sitting out its timeout
+		scope (exit)
+			synchronized (mutex)
+				notifyDataAvailable();
 		int fd = stdFile.fileno;
 
 		ubyte[4096] buffer;
@@ -240,7 +260,10 @@ version (Posix) class PosixFileReader : FileReader
 				else
 				{
 					synchronized (mutex)
+					{
 						data ~= buffer[0 .. len];
+						notifyDataAvailable();
+					}
 				}
 			}
 		}
@@ -261,6 +284,27 @@ abstract class FileReader : Thread
 		super(&run);
 		isDaemon = true;
 		mutex = new Mutex();
+		dataAvailable = new Condition(mutex);
+	}
+
+	/// Blocks until data is appended or `timeout` elapses.
+	/// Returns: false without waiting when data is already buffered, so a caller
+	/// driving a loop can tell it must not treat this as a completed wait.
+	bool waitForData(Duration timeout)
+	{
+		synchronized (mutex)
+		{
+			if (data.length)
+				return false;
+			dataAvailable.wait(timeout);
+			return true;
+		}
+	}
+
+	/// Wakes `waitForData`. Call while holding `mutex`.
+	protected void notifyDataAvailable()
+	{
+		dataAvailable.notifyAll();
 	}
 
 	string yieldLine(bool* whileThisIs = null, bool equalToThis = true)
@@ -332,6 +376,7 @@ protected:
 
 	ubyte[] data;
 	Mutex mutex;
+	Condition dataAvailable;
 }
 
 /// Creates a new FileReader using the GC reading from stdin using a platform
@@ -431,4 +476,54 @@ unittest
 	slice = new ubyte[7];
 	code = readCodeWithBuffer("lsp/source/served/lsp/filereader.d", slice, 16);
 	assert(code == "module served.ls");
+}
+
+
+unittest
+{
+	import core.time : msecs, seconds;
+	import std.datetime.stopwatch : AutoStart, StopWatch;
+
+	// concrete reader that never reads anything, so `data` is driven by the test
+	static class TestReader : FileReader
+	{
+		override void stop() {}
+		override bool isReading() { return true; }
+		protected override void run() {}
+
+		void append(ubyte[] bytes)
+		{
+			synchronized (mutex)
+			{
+				data ~= bytes;
+				notifyDataAvailable();
+			}
+		}
+	}
+
+	auto reader = new TestReader();
+
+	// nothing buffered: waits, and reports that it waited
+	auto sw = StopWatch(AutoStart.yes);
+	assert(reader.waitForData(50.msecs));
+	assert(sw.peek >= 40.msecs);
+
+	// data already buffered: must return false *without* waiting, otherwise a
+	// caller skipping its sleep on the strength of this call would spin
+	reader.append(cast(ubyte[]) "Content-Length: 99\r\n\r\npartial".dup);
+	sw = StopWatch(AutoStart.yes);
+	assert(!reader.waitForData(5.seconds));
+	assert(sw.peek < 1.seconds);
+
+	// appending wakes a waiter well before the timeout
+	auto empty = new TestReader();
+	auto waker = new Thread({
+		Thread.sleep(30.msecs);
+		empty.append(cast(ubyte[]) "x".dup);
+	});
+	waker.start();
+	sw = StopWatch(AutoStart.yes);
+	assert(empty.waitForData(5.seconds));
+	assert(sw.peek < 2.seconds);
+	waker.join();
 }

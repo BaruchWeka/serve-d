@@ -42,6 +42,10 @@ struct LanguageServerConfig
 	/// periodic collector to run again. One collection also always runs once the
 	/// server goes quiet.
 	size_t gcCollectMinAllocated = 128 * 1024 * 1024;
+
+	/// How long to block waiting for input while idle, in milliseconds. Incoming
+	/// data wakes it immediately. 0 polls instead.
+	int idleWaitMsecs = 1000;
 }
 
 // dumps a performance/GC trace log to served_trace.log
@@ -563,6 +567,11 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 		static if (is(typeof(ExtensionModule.parallelMain)))
 			pushFiber("parallelMain", &ExtensionModule.parallelMain);
 
+		// The RPC manager and parallelMain live forever; anything else is work.
+		size_t permanentFibers;
+		synchronized (fibersMutex)
+			permanentFibers = fibers.length;
+
 		while (rpc.state != Fiber.State.TERM)
 		{
 			while (rpc.hasData)
@@ -578,7 +587,29 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 				static if (serverConfig.gcCollectSeconds > 0)
 					activityThisInterval = activitySinceCollect = true;
 			}
-			Thread.sleep(loopIterationDelay);
+			// Wait for input when there is nothing to do at all. Otherwise keep the
+			// fixed cadence: a live fiber may need resuming to make progress.
+			static if (serverConfig.idleWaitMsecs > 0)
+			{
+				bool nothingToDo;
+				synchronized (fibersMutex)
+					nothingToDo = fibers.length <= permanentFibers;
+
+				// created by parallelMain; until then there are no timeouts
+				if (nothingToDo && timeoutsMutex !is null)
+					synchronized (timeoutsMutex)
+						nothingToDo = timeouts.length == 0;
+
+				// keep the fixed cadence unless we really blocked: waitForInput
+				// returns false when raw bytes are already buffered (a message
+				// arriving in pieces), and skipping the sleep there would spin
+				if (!nothingToDo
+					|| !rpc.waitForInput(serverConfig.idleWaitMsecs.msecs))
+					Thread.sleep(loopIterationDelay);
+			}
+			else
+				Thread.sleep(loopIterationDelay);
+
 			synchronized (fibersMutex)
 				fibers.call();
 
