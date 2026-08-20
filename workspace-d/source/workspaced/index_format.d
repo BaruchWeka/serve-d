@@ -109,6 +109,7 @@ struct IndexCache
 	out (ret; ret.indexCount == ret.lookup.length)
 	do
 	{
+		import core.stdc.stdio : SEEK_CUR;
 		import std.stdio : File;
 
 		try
@@ -159,6 +160,7 @@ struct IndexCache
 			if (formatVersion != '1')
 				throw new Exception("File format version unsupported");
 
+			size_t dropped;
 			while (!f.eof)
 			{
 				auto fileOffset = f.tell;
@@ -175,7 +177,25 @@ struct IndexCache
 				auto flags = readDataFix!4;
 				idx.hasMixin = flags[0] == 1;
 
+				// The cache file is global to the machine and only ever grew, so it
+				// accumulates every checkout ever opened. An entry that no longer
+				// matches the file on disk can never be served by `getIfActive`, so
+				// don't spend the deserialization (or the memory to hold it) on it.
+				auto meta = getFileMeta(idx.fileName);
+				immutable stale = meta is typeof(meta).init
+					|| meta[1] != idx.lastModified
+					|| meta[2] != idx.fileSize
+					|| !!(idx.fileName in ret.lookup);
+
 				uint numItems = readDataFix!4.littleEndianToNative!uint;
+				if (stale)
+				{
+					foreach (item; 0 .. numItems)
+						f.seek(readDataFix!4.littleEndianToNative!uint, SEEK_CUR);
+					dropped++;
+					continue;
+				}
+
 				idx.elements.length = numItems;
 				foreach (item; 0 .. numItems)
 				{
@@ -188,12 +208,18 @@ struct IndexCache
 				}
 
 				size_t i = ret.index.length;
-				if (idx.fileName in ret.lookup)
-					throw new Exception("Duplicate file cache entry for " ~ idx.fileName);
 				ret.index ~= idx;
 				ret.lookup[idx.fileName] = i;
 			}
-			ret.appendOnly = ret.index.length;
+			if (dropped)
+			{
+				info("Dropped ", dropped, " stale symbol index entries, kept ", ret.index.length);
+				// force save() to rewrite the file instead of appending to it, so
+				// the dropped entries are gone for good
+				ret.appendOnly = size_t.max;
+			}
+			else
+				ret.appendOnly = ret.index.length;
 			return move(ret);
 		}
 		catch (Exception e)
