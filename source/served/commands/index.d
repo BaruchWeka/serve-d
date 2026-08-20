@@ -125,8 +125,13 @@ private void delayedSaveIndex(IndexComponent index)
 private void traceIndexerStats(IndexComponent index)
 {
 	import core.memory;
+	import served.utils.memory : trimCRuntimeHeap;
+
 	GC.collect();
 	GC.minimize();
+	// indexing is the allocation peak of the whole server; hand the pages back
+	// now rather than waiting for the periodic collector
+	trimCRuntimeHeap();
 
 	trace("Indexer stats for ", index.refInstance.cwd, ":");
 	auto stats = index.getHealth();

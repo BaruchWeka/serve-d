@@ -501,6 +501,7 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 			void collectGC(bool forceMinimize = false)
 			{
 				import core.memory : GC;
+				import served.utils.memory : trimCRuntimeHeap;
 
 				auto before = GC.stats();
 				StopWatch gcSpeed;
@@ -518,6 +519,10 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 					if (forceMinimize || gcCollects >= serverConfig.gcMinimizeTimes)
 					{
 						GC.minimize();
+						// libdparse parses into malloc'd regions, so a big indexing
+						// run leaves gigabytes sitting in the C heap that
+						// GC.minimize never sees.
+						trimCRuntimeHeap();
 						gcCollects = 0;
 					}
 				}

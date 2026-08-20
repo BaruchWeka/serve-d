@@ -16,3 +16,18 @@ deprecated("Type doesn't support to be destroyed in this D version") void destro
 		if (!__traits(compiles, destroy!false(value)) && !__traits(compiles, destroy(value)))
 {
 }
+
+version (CRuntime_Glibc)
+{
+	private extern (C) int malloc_trim(size_t pad) nothrow @nogc;
+}
+
+/// Asks the C runtime to hand free heap pages back to the OS. `GC.minimize`
+/// only covers the D heap; anything reaching the C allocator (libdparse's
+/// `RollbackAllocator`, the emsi containers) stays mapped in the glibc arenas
+/// otherwise. No-op where the C runtime has no such call.
+void trimCRuntimeHeap() nothrow @nogc
+{
+	version (CRuntime_Glibc)
+		malloc_trim(0);
+}
