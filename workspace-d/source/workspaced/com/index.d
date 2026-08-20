@@ -717,7 +717,11 @@ private void appendSourceFiles(R)(ref R range, string path)
 		if (!existsAndIsDir(path))
 			return;
 
-		foreach (file; dirEntries(path, SpanMode.breadth))
+		// don't descend into symlinked directories: build systems like to drop
+		// convenience links (bazel-bin, bazel-out, ...) into the workspace root
+		// that point back at the very sources we are already walking, so
+		// following them indexes most of the project twice.
+		foreach (file; dirEntries(path, SpanMode.breadth, false))
 		{
 			if (!file.isFile)
 				continue;
