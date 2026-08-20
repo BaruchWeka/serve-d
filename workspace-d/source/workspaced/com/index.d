@@ -753,6 +753,30 @@ private bool hasAnyParserToken(scope const(char)[] code, StringCache* cache)
 	return false;
 }
 
+unittest
+{
+	// must answer exactly what `getTokensForParser(...).length > 0` used to
+	static immutable samples = [
+		"",
+		"   \n\t\n",
+		"// just a comment\n",
+		"/* block */\n/// ddoc\n",
+		"#!/usr/bin/env rdmd\n",
+		"module a;",
+		"// comment\nmodule a;",
+		"void main() {}",
+	];
+
+	StringCache cache = StringCache(StringCache.defaultBucketCount);
+	foreach (code; samples)
+	{
+		LexerConfig config;
+		config.stringBehavior = StringBehavior.source;
+		auto expected = getTokensForParser(cast(ubyte[]) code, config, &cache).length > 0;
+		assert(hasAnyParserToken(code, &cache) == expected, code);
+	}
+}
+
 private void appendSourceFiles(R)(ref R range, string path)
 {
 	import std.file : exists, dirEntries, SpanMode;

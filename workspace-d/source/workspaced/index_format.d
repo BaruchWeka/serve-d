@@ -211,15 +211,14 @@ struct IndexCache
 				ret.index ~= idx;
 				ret.lookup[idx.fileName] = i;
 			}
+			// Compacting means rewriting the whole file, which is hundreds of MB, so
+			// only do it once the dead weight is worth the write. Below that the
+			// entries just stay in the file and get skipped again next time.
+			immutable compact = dropped > ret.index.length / 4;
 			if (dropped)
-			{
-				info("Dropped ", dropped, " stale symbol index entries, kept ", ret.index.length);
-				// force save() to rewrite the file instead of appending to it, so
-				// the dropped entries are gone for good
-				ret.appendOnly = size_t.max;
-			}
-			else
-				ret.appendOnly = ret.index.length;
+				info("Skipped ", dropped, " stale symbol index entries, kept ",
+					ret.index.length, compact ? ", compacting" : "");
+			ret.appendOnly = compact ? size_t.max : ret.index.length;
 			return move(ret);
 		}
 		catch (Exception e)
