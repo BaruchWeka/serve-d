@@ -319,6 +319,9 @@ class IndexComponent : ComponentWrapper
 		return null;
 	}
 
+	/// How many files to have in flight at once while indexing a whole project.
+	enum indexBatchSize = 64;
+
 	Future!void autoIndexSources(string[] stdlib, bool save)
 	{
 		auto ret = new typeof(return)();
@@ -340,14 +343,29 @@ class IndexComponent : ComponentWrapper
 
 				trace("Indexing ", files.data.length, " files inside workspace ", cwd, "...");
 
-				auto tasks = files.data.map!(f => reindexFromDisk(f)).array;
+				// Queue the files in batches rather than all at once: every
+				// in-flight task pins the file text it was handed plus the
+				// definitions it produced until the whole set is done. On a big
+				// project that peak is what makes the GC grow its pools to several
+				// GB, which it then never gives back.
+				auto todo = files.data;
+				void indexBatch(size_t start)
+				{
+					if (start >= todo.length)
+					{
+						trace("Done indexing ", todo.length, " files in ", sw.peek);
+						if (save)
+							saveIndex();
+						ret.finish();
+						return;
+					}
 
-				whenAllDone(tasks, {
-					trace("Done indexing ", files.data.length, " files in ", sw.peek);
-					if (save)
-						saveIndex();
-					ret.finish();
-				});
+					auto end = min(start + indexBatchSize, todo.length);
+					auto tasks = todo[start .. end].map!(f => reindexFromDisk(f)).array;
+					whenAllDone(tasks, { indexBatch(end); });
+				}
+
+				indexBatch(0);
 			}
 			catch (Throwable t)
 			{
@@ -531,8 +549,7 @@ private:
 
 	Future!ImportCacheEntry generateCacheEntry(string file, SysTime writeTime, ulong fileSize, scope const(char)[] code)
 	{
-		scope tokens = getTokensForParser(cast(ubyte[]) code, config, &workspaced.stringCache);
-		if (!tokens.length)
+		if (!hasAnyParserToken(code, &workspaced.stringCache))
 			return typeof(return).fromResult(ImportCacheEntry.init);
 
 		auto ret = new typeof(return);
@@ -705,6 +722,35 @@ struct IndexHealthReport
 	size_t numImports;
 	size_t numDefinitions;
 	string[] failedFiles;
+}
+
+/// `true` if the parser would see at least one token in `code`, i.e. it is not
+/// empty, whitespace or comments only. Same rule as `getTokensForParser`, but
+/// stops at the first token instead of lexing the whole file into an array the
+/// caller throws away - the parser lexes it again anyway.
+private bool hasAnyParserToken(scope const(char)[] code, StringCache* cache)
+{
+	LexerConfig config;
+	config.stringBehavior = StringBehavior.source;
+	config.whitespaceBehavior = WhitespaceBehavior.include;
+	config.commentBehavior = CommentBehavior.noIntern;
+
+	auto lexer = DLexer(cast(ubyte[]) code, config, cache);
+	for (; !lexer.empty; lexer.popFront())
+	{
+		switch (lexer.front.type)
+		{
+		case tok!"specialTokenSequence":
+		case tok!"whitespace":
+		case tok!"comment":
+			continue;
+		case tok!"__EOF__":
+			return false;
+		default:
+			return true;
+		}
+	}
+	return false;
 }
 
 private void appendSourceFiles(R)(ref R range, string path)
