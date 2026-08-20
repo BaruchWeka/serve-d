@@ -81,12 +81,39 @@ The peak is what OOMs the laptop: two instances went from a 31 GB spike to 6 GB.
 | `symbolindex.bin` | 488 MB | 264 MB |
 | live GC data (warm) | 5 422 MB | 2 004 MB |
 
-Coverage change from the symlink fix: 4 105 → 4 039 modules. The 66 lost are all bazel rule
-test fixtures under `external/rules_d+/…` and a second copy of the LDC stdlib from a docker
-image - none of them weka code, and that stdlib copy was shadowing the real one. Symlinked
-*roots* still work (`d.extraRoots`, import paths): only descending into symlinked
-subdirectories stops, so a project that symlinks a real source tree into the workspace has to
-name it as a root.
+`indexBatchSize` sweep (cold, `MALLOC_ARENA_MAX=1`) - the curve is shallow above 64, and
+almost all of the win comes from having *any* bound:
+
+| batch | steady | peak | indexing |
+|---|---|---|---|
+| unbounded (baseline) | 11 051 MB | 11 276 MB | 30.9 s |
+| 256 | 2 704 MB | 5 503 MB | 16.5 s |
+| **64** | **2 236 MB** | **4 910 MB** | **16.7 s** |
+| 16 | 2 441 MB | 4 286 MB | 19.3 s |
+
+Coverage change from the symlink fix: 4 105 → 4 039 modules. Most are bazel rule test fixtures
+under `external/rules_d+/…`, but **not all of it is harmless**: the bazel build compiles against
+an LDC from a docker image whose druntime is newer than the system one, and modules that only
+exist there (`core.interpolation`, `core.stdc.stdatomic`, `core.sys.freebsd.net.if_`, …) are now
+unindexed. They were reachable *only* through the `bazel-*` symlink walk - they are absent from
+`/usr/lib/ldc/x86_64-linux-gnu/include/d`, which is the stdlib serve-d and dcd-server actually
+use. That mismatch predates this change; the double-walk was hiding it.
+
+Remedy, one config line - point serve-d at the toolchain the project builds with:
+
+```
+d.stdlibPath = ["/home/baruch/.cache/bazel/_bazel_baruch/<output-base>/external/+docker_image_ext+ldc-base/ldc2/include/d"]
+```
+
+Symlinked *roots* are still followed (`d.stdlibPath`, `d.extraRoots`, import paths); only
+descending into symlinked subdirectories stops. So a project that symlinks a real source tree
+into the workspace has to name it as a root.
+
+The prune adds one more trigger for `save()`'s unlocked `File(fileName, "w")` full rewrite (the
+first load after staleness passes 25 %). Full rewrites were already routine - `setFile` forces
+one for any changed file - and the worst case of two instances racing is the corrupt-cache
+rebuild `load` already catches, but that is the reason for the 25 % threshold rather than
+rewriting whenever anything is stale.
 
 `heapSizeFactor:4` in the nvim config is not worth changing: 3 038 MB with it vs 2 982 MB
 without. `parallel:2` does help - it cuts the collect pause from 2.1 s to 0.7 s. Keep the line
@@ -96,6 +123,16 @@ Tests: `dub test` for `:http`, `:lsp`, `:serverbase`, `workspace-d` and serve-d 
 and after. workspace-d 32→33 passing (the new `hasAnyParserToken` equivalence test) with the
 same 2 pre-existing failures from a missing `test/data` dir; serve-d 22 passing with the same
 pre-existing `served.linters.dscanner` failure.
+
+All numbers above are debug (`--build-mode=allAtOnce`) builds on both sides. The binary at
+`~/bin/serve-d` is a stripped release build; install with
+
+```
+dub build --compiler=~/dlang/ldc-1.42.0/bin/ldc2 --build=release && cp serve-d ~/bin/serve-d
+```
+
+after quitting the editors holding the current one. A release build should land at or below
+these figures, but that was not measured.
 
 ## Remaining
 
