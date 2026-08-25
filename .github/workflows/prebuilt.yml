@@ -4,8 +4,8 @@ name: Prebuilt binaries
 # publishes them to a rolling `nightly` prerelease, so they can be fetched from
 # a stable URL without a GitHub login:
 #
-#   https://github.com/BaruchWeka/serve-d/releases/latest/download/serve-d_linux-x86_64.tar.xz
-#   https://github.com/BaruchWeka/serve-d/releases/latest/download/serve-d_macos-arm64.tar.xz
+#   https://github.com/BaruchWeka/serve-d/releases/download/nightly/serve-d_linux-x86_64.tar.xz
+#   https://github.com/BaruchWeka/serve-d/releases/download/nightly/serve-d_macos-arm64.tar.xz
 #
 # The same files are also attached to each run as workflow artifacts, which is
 # what you want when you need the binary for one specific commit.
@@ -40,8 +40,8 @@ jobs:
 
           | download | platform |
           |---|---|
-          | [serve-d_linux-x86_64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/serve-d_linux-x86_64.tar.xz) | Linux x86_64 (glibc 2.35+) |
-          | [serve-d_macos-arm64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/serve-d_macos-arm64.tar.xz) | macOS arm64 (Apple Silicon) |
+          | [serve-d_linux-x86_64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/serve-d_linux-x86_64.tar.xz) | Linux x86_64 (glibc 2.34+) |
+          | [serve-d_macos-arm64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/serve-d_macos-arm64.tar.xz) | macOS arm64 (Apple Silicon) |
 
           \`.tar.gz\` variants are attached as well.
 
