@@ -1,11 +1,11 @@
 name: Prebuilt binaries
 
 # Builds serve-d for Linux x86_64 and macOS arm64 on every push to master and
-# publishes them to a rolling `nightly` prerelease, so they can be fetched from
+# publishes them to a rolling `continuous` prerelease, so they can be fetched from
 # a stable URL without a GitHub login:
 #
-#   https://github.com/BaruchWeka/serve-d/releases/download/nightly/serve-d_linux-x86_64.tar.xz
-#   https://github.com/BaruchWeka/serve-d/releases/download/nightly/serve-d_macos-arm64.tar.xz
+#   https://github.com/BaruchWeka/serve-d/releases/download/continuous/serve-d_linux-x86_64.tar.xz
+#   https://github.com/BaruchWeka/serve-d/releases/download/continuous/serve-d_macos-arm64.tar.xz
 #
 # The same files are also attached to each run as workflow artifacts, which is
 # what you want when you need the binary for one specific commit.
@@ -29,7 +29,23 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Ensure the nightly release exists and points at this build
+      - name: Point the continuous tag at this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -e
+          if gh api "repos/$GH_REPO/git/ref/tags/continuous" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/continuous" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            echo "moved continuous -> $GITHUB_SHA"
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f ref=refs/tags/continuous -f sha="$GITHUB_SHA" >/dev/null
+            echo "created continuous -> $GITHUB_SHA"
+          fi
+
+      - name: Ensure the continuous release exists and points at this build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -40,17 +56,17 @@ jobs:
 
           | download | platform |
           |---|---|
-          | [serve-d_linux-x86_64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/serve-d_linux-x86_64.tar.xz) | Linux x86_64 (glibc 2.34+) |
-          | [serve-d_macos-arm64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/serve-d_macos-arm64.tar.xz) | macOS arm64 (Apple Silicon) |
+          | [serve-d_linux-x86_64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/continuous/serve-d_linux-x86_64.tar.xz) | Linux x86_64 (glibc 2.34+) |
+          | [serve-d_macos-arm64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/download/continuous/serve-d_macos-arm64.tar.xz) | macOS arm64 (Apple Silicon) |
 
           \`.tar.gz\` variants are attached as well.
 
           Built from ${GITHUB_SHA}.
           EOF
-          if gh release view nightly >/dev/null 2>&1; then
-            gh release edit nightly --notes-file notes.md
+          if gh release view continuous >/dev/null 2>&1; then
+            gh release edit continuous --notes-file notes.md
           else
-            gh release create nightly \
+            gh release create continuous \
               --prerelease \
               --target "$GITHUB_SHA" \
               --title "Latest master build" \
@@ -110,7 +126,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release upload nightly \
+          gh release upload continuous \
             serve-d_${{ matrix.name }}.tar.xz \
             serve-d_${{ matrix.name }}.tar.gz \
             --clobber
