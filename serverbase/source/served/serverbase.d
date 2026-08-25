@@ -501,8 +501,9 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 			void collectGC(bool forceMinimize = false)
 			{
 				import core.memory : GC;
-				import served.utils.memory : trimCRuntimeHeap;
+				import served.utils.memory : minimizeUntilSettled, trimCRuntimeHeap;
 
+				int minimizeRounds;
 				auto before = GC.stats();
 				StopWatch gcSpeed;
 				gcSpeed.start();
@@ -518,7 +519,9 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 					// gcMinimizeTimes on its own
 					if (forceMinimize || gcCollects >= serverConfig.gcMinimizeTimes)
 					{
-						GC.minimize();
+						// One minimize can be budget-limited, leaving free pool
+						// pages mapped that a further call would return.
+						minimizeRounds = minimizeUntilSettled();
 						// libdparse parses into malloc'd regions, so a big indexing
 						// run leaves gigabytes sitting in the C heap that
 						// GC.minimize never sees.
@@ -533,8 +536,9 @@ mixin template LanguageServerRouter(alias ExtensionModule, LanguageServerConfig 
 				activitySinceCollect = false;
 
 				if (before != after)
-					tracef("GC run in %s. Freed %s bytes (%s bytes allocated, %s bytes available)", gcSpeed.peek,
-							cast(long) before.usedSize - cast(long) after.usedSize, after.usedSize, after.freeSize);
+					tracef("GC run in %s. Freed %s bytes (%s bytes allocated, %s bytes available, %s minimize rounds)",
+							gcSpeed.peek, cast(long) before.usedSize - cast(long) after.usedSize,
+							after.usedSize, after.freeSize, minimizeRounds);
 				else
 					trace("GC run in ", gcSpeed.peek);
 
