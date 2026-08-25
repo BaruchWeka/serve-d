@@ -1,0 +1,116 @@
+name: Prebuilt binaries
+
+# Builds serve-d for Linux x86_64 and macOS arm64 on every push to master and
+# publishes them to a rolling `nightly` prerelease, so they can be fetched from
+# a stable URL without a GitHub login:
+#
+#   https://github.com/BaruchWeka/serve-d/releases/latest/download/serve-d_linux-x86_64.tar.xz
+#   https://github.com/BaruchWeka/serve-d/releases/latest/download/serve-d_macos-arm64.tar.xz
+#
+# The same files are also attached to each run as workflow artifacts, which is
+# what you want when you need the binary for one specific commit.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: prebuilt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # One job owns creating the release, so the two build jobs can't race on it.
+  release:
+    name: Prepare rolling release
+    # This uploads to *this* fork's releases; don't run it if the workflow ever
+    # travels upstream in a pull request.
+    if: github.repository_owner == 'BaruchWeka'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Ensure the nightly release exists and points at this build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -e
+          cat > notes.md <<EOF
+          Prebuilt \`serve-d\` binaries, rebuilt on every push to \`master\`.
+
+          | download | platform |
+          |---|---|
+          | [serve-d_linux-x86_64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/serve-d_linux-x86_64.tar.xz) | Linux x86_64 (glibc 2.35+) |
+          | [serve-d_macos-arm64.tar.xz](https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/serve-d_macos-arm64.tar.xz) | macOS arm64 (Apple Silicon) |
+
+          \`.tar.gz\` variants are attached as well.
+
+          Built from ${GITHUB_SHA}.
+          EOF
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --notes-file notes.md
+          else
+            gh release create nightly \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "Latest master build" \
+              --notes-file notes.md
+          fi
+
+  build:
+    name: ${{ matrix.name }}
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux must build on kinda old linux for glibc compatibility!
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            arch: x86_64
+          - name: macos-arm64
+            os: macos-latest
+            arch: arm64-apple-macos
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install D compiler
+        uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: ldc-latest
+
+      - name: cache dependency binaries
+        uses: WebFreak001/dub-upgrade@v0.3.0
+
+      # build.sh strips the binary, runs `serve-d --version` as a smoke test and
+      # packs both a .tar.xz and a .tar.gz.
+      - name: Build release
+        run: ./ci/build.sh
+        env:
+          ARCH: ${{ matrix.arch }}
+          BUILD: release
+
+      - name: Label the tarballs with the platform
+        run: |
+          mv serve-d.tar.xz serve-d_${{ matrix.name }}.tar.xz
+          mv serve-d.tar.gz serve-d_${{ matrix.name }}.tar.gz
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: serve-d_${{ matrix.name }}
+          path: serve-d_${{ matrix.name }}.tar.*
+          if-no-files-found: error
+
+      - name: Attach to the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload nightly \
+            serve-d_${{ matrix.name }}.tar.xz \
+            serve-d_${{ matrix.name }}.tar.gz \
+            --clobber
